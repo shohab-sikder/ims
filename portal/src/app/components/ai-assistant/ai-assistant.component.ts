@@ -22,7 +22,7 @@ export class AiAssistantComponent implements AfterViewChecked, OnDestroy {
     'Which products are running low on stock?',
     'How were sales last month compared to the month before?',
     'What should I restock next month and how much?',
-    'Give me an overall analysis of my inventory.',
+    'Give me my overall project statistics.',
   ];
 
   constructor(private ai: AiService, private zone: NgZone) {}

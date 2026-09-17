@@ -88,7 +88,7 @@ const CHAT_TOOLS = [
         type: 'function',
         function: {
             name: 'get_inventory_overview',
-            description: 'Counts, total stock, low-stock items, and total sales/purchase value. Use for general "how is the business doing" questions.',
+            description: 'Overall project/business statistics: counts of products, vendors, customers, warehouses, invoices, total invoiced value, total stock, low-stock items, and total sales/purchase value. Use for general "how is the business doing" or "give me my project statistics" questions.',
             parameters: { type: 'object', properties: {} },
         },
     },
@@ -127,10 +127,13 @@ const runChatTool = async (name, input) => {
         case 'get_inventory_overview': {
             const [counts, lowStock, totals] = await Promise.all([
                 pool.query(`SELECT
-                    (SELECT COUNT(*) FROM products  WHERE is_deleted=FALSE) AS products,
-                    (SELECT COUNT(*) FROM vendors   WHERE is_deleted=FALSE) AS vendors,
-                    (SELECT COUNT(*) FROM customers WHERE is_deleted=FALSE) AS customers,
-                    (SELECT COALESCE(SUM(quantity),0) FROM stocks WHERE is_deleted=FALSE) AS total_stock_units`),
+                    (SELECT COUNT(*) FROM products   WHERE is_deleted=FALSE) AS products,
+                    (SELECT COUNT(*) FROM vendors     WHERE is_deleted=FALSE) AS vendors,
+                    (SELECT COUNT(*) FROM customers   WHERE is_deleted=FALSE) AS customers,
+                    (SELECT COUNT(*) FROM warehouses  WHERE is_deleted=FALSE) AS warehouses,
+                    (SELECT COUNT(*) FROM invoices    WHERE is_deleted=FALSE) AS invoices,
+                    (SELECT COALESCE(SUM(total),0)    FROM invoices WHERE is_deleted=FALSE) AS total_invoiced_value,
+                    (SELECT COALESCE(SUM(quantity),0) FROM stocks  WHERE is_deleted=FALSE) AS total_stock_units`),
                 pool.query(`SELECT p.pname, p.pcode, SUM(s.quantity)::numeric AS stock
                     FROM stocks s JOIN products p ON p.id=s.productid
                     WHERE s.is_deleted=FALSE AND p.is_deleted=FALSE
@@ -179,11 +182,26 @@ const runChatTool = async (name, input) => {
     }
 };
 
-const CHAT_SYSTEM_PROMPT =
-    'You are the AI assistant inside InvenTrack, an inventory management system. ' +
-    'Answer questions about stock, sales, purchases and forecasts using the tools — never invent numbers. ' +
-    'Be brief and concrete. Plain prose or short bullets; no markdown tables, headers or bold. ' +
-    'Decline anything unrelated to the business.';
+// Built fresh per request (not at module load) so a long-running server always
+// states the real "today" — the model has no other way to know the current
+// date, and get_sales_summary only returns rows for months that have data, so
+// without this it will pick the latest returned row and mislabel it "current".
+const buildSystemPrompt = () => {
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const currentMonth = today.slice(0, 7);
+    return (
+        `Today's date is ${today}. The current month is ${currentMonth}. ` +
+        'You are the AI assistant inside InvenTrack, an inventory management system. ' +
+        'Answer questions about stock, sales, purchases and forecasts using the tools — never invent numbers. ' +
+        'Tool results are grouped by month but only include months that actually have data — a month with no ' +
+        `rows (including ${currentMonth}) means zero activity, not missing data. Never call an older month "the ` +
+        'current month" or "this month" — always name the actual month (e.g. "2026-07") and say plainly when the ' +
+        'current month has no activity yet instead of substituting the most recent month with data. ' +
+        'Be brief and concrete. Plain prose or short bullets; no markdown tables, headers or bold. ' +
+        'Decline anything unrelated to the business.'
+    );
+};
 
 const MAX_TOOL_TURNS = 8;
 
@@ -194,7 +212,7 @@ const MAX_TOOL_TURNS = 8;
  */
 const chat = async (history) => {
     const messages = [
-        { role: 'system', content: CHAT_SYSTEM_PROMPT },
+        { role: 'system', content: buildSystemPrompt() },
         ...history.map((m) => ({ role: m.role, content: String(m.content) })),
     ];
 
@@ -250,7 +268,7 @@ const TOOL_STATUS = {
 
 const runChatStream = async (provider, history, onEvent) => {
     const messages = [
-        { role: 'system', content: CHAT_SYSTEM_PROMPT },
+        { role: 'system', content: buildSystemPrompt() },
         ...history.map((m) => ({ role: m.role, content: String(m.content) })),
     ];
 
